@@ -1,0 +1,103 @@
+Step 2 — Ant build (import → run pvSCL → transform all VDMs)
+
+
+Where to save
+C:\jobs\sfm\build.xml
+
+
+<?xml version="1.0" encoding="UTF-8"?>
+<project name="sfm-nightly" default="run-all">
+
+  <!-- ======= Parameters (override via -D...) ======= -->
+  <property name="WORKSPACE"     value="C:/pv-workspace"/>
+  <property name="PROJECT_PATH"  value="C:/repos/Vehicle-SystemFunctionmanagement"/>
+  <property name="TARGET_PROJECT" value="Vehicle-SystemFunctionmanagement"/>
+
+  <property name="TRANSFORM_NAME" value="SFM_Nightly"/>
+  <property name="VDM_LIST_FILE"  value="C:/jobs/sfm/vdm-list.txt"/>
+  <property name="OUT_DIR"        value="C:/artifacts/sfm/${DSTAMP}-${TSTAMP}"/>
+
+  <!-- ======= Step 0: import (idempotent) ======= -->
+  <!-- Imports the project into the (headless) workspace once. -->
+  <target name="import">
+    <pv.import path="${PROJECT_PATH}"/>
+  </target>
+
+  <!-- ======= Step 1: generate list via pvSCL ======= -->
+  <!-- Executes the JavaScript with project context; writes quoted list of VDMs. -->
+  <target name="generate-list" depends="import">
+    <mkdir dir="${basedir}"/>
+    <pv.javascript script="C:/jobs/sfm/genVdmList.js"
+                   project="${TARGET_PROJECT}"/>
+    <!-- Pass runtime properties for the pvSCL script to read via PVProperty -->
+    <jvmarg value="-DTARGET_PROJECT=${TARGET_PROJECT}"/>
+    <jvmarg value="-DOUTPUT_LIST=${VDM_LIST_FILE}"/>
+    <!-- Optional: prefixes override -->
+    <!-- <jvmarg value="-DPREFIXES=System-,Component-,TM-,QST-,Contribution-,Central-,Software-"/> -->
+  </target>
+
+  <!-- ======= Step 2 (optional but recommended): validate ======= -->
+  <!-- Fast-fail if there are model problems before transforming -->
+  <target name="validate" depends="generate-list">
+    <pv.validate model="${TARGET_PROJECT}/Variants"
+                 >
+      <property name="severity" value="warning"/>
+      <!-- You could also use a modelset include/exclude here if needed -->
+    </pv.validate>
+  </target>
+
+  <!-- ======= Step 3: transform all listed VDMs ======= -->
+  <!-- Uses variantscli.bat to run the named transformation on every VDM. -->
+  <target name="transform" depends="validate">
+    <!-- Load vdm-list into a property -->
+    <loadfile property="VDM_LIST" srcFile="${VDM_LIST_FILE}"/>
+    <!-- Ensure OUT_DIR exists; some transformations read OUT_DIR from PVProperty -->
+    <mkdir dir="${OUT_DIR}"/>
+
+    <!-- Call variantscli; -l prints Eclipse log on exit; pass OUT_DIR/NIGHTLY to the VM -->
+    <exec executable="cmd" osfamily="windows" failonerror="true">
+      <arg value="/c"/>
+      <arg value="variantscli.bat"/>
+      <arg value="-l"/>
+      <arg value="${TRANSFORM_NAME}"/>
+      <!-- Inline all quoted VDM paths read from the list -->
+      <arg line="${VDM_LIST}"/>
+    </exec>
+  </target>
+
+  <!-- Convenience: full pipeline -->
+  <target name="run-all" depends="transform"/>
+</project>
+
+
+
+Smoke test (manual, same day)
+Open Command Prompt (as the same user that will later run the scheduled task) and run the pipeline end-to-end:
+"C:\Program Files\pure-systems\pv_Enterprise_6.x\cli\runant.bat" ^
+  -w C:\pv-workspace C:\jobs\sfm\build.xml ^
+  -DPROJECT_PATH=C:\repos\Vehicle-SystemFunctionmanagement ^
+  -DTARGET_PROJECT=Vehicle-SystemFunctionmanagement ^
+  -DVDM_LIST_FILE=C:\jobs\sfm\vdm-list.txt ^
+  -DOUT_DIR=D:\artifacts\sfm
+
+
+
+Create a launcher script:
+C:\jobs\sfm\sfm-nightly.cmd
+
+@echo off
+setlocal
+set LOG=C:\jobs\sfm\logs\sfm-%DATE:~-4%%DATE:~3,2%%DATE:~0,2%-%TIME:~0,2%%TIME:~3,2%.log
+if not exist C:\jobs\sfm\logs mkdir C:\jobs\sfm\logs
+
+"C:\Program Files\pure-systems\pv_Enterprise_6.x\cli\runant.bat" ^
+  -w C:\pv-workspace C:\jobs\sfm\build.xml ^
+  -DPROJECT_PATH=C:\repos\Vehicle-SystemFunctionmanagement ^
+  -DTARGET_PROJECT=Vehicle-SystemFunctionmanagement ^
+  -DVDM_LIST_FILE=C:\jobs\sfm\vdm-list.txt ^
+  -DOUT_DIR=D:\artifacts\sfm ^
+  -DTRANSFORM_NAME=SFM_Nightly ^
+  -DPREFIXES=System-,Component-,TM-,QST-,Contribution-,Central-,Software- ^
+  >> "%LOG%" 2>&1
+
+endlocal
